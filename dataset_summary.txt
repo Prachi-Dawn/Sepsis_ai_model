@@ -1,0 +1,23 @@
+
+===== Dataset A =====
+Files found: 20336
+Patients: 20336
+Patients with sepsis: 1790
+Patients without sepsis: 18546
+Total rows: 790215
+Positive rows: 17136
+
+===== Dataset B =====
+Files found: 20000
+Patients: 20000
+Patients with sepsis: 1142
+Patients without sepsis: 18858
+Total rows: 761995
+Positive rows: 10780
+
+===== COMBINED SUMMARY =====
+Total patients: 40336
+Patients with sepsis: 2932
+Patients without sepsis: 37404
+Total rows: 1552210
+Total positive rows: 27916

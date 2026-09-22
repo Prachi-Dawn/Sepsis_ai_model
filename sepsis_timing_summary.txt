@@ -1,0 +1,35 @@
+
+===== Dataset A =====
+Total patients: 20336
+Patients with sepsis: 1790
+First sepsis hour - minimum: 1.00
+First sepsis hour - maximum: 331.00
+First sepsis hour - average: 50.00
+First sepsis hour - median: 29.50
+Positive hours per patient - minimum: 6
+Positive hours per patient - maximum: 10
+Positive hours per patient - average: 9.57
+Positive hours per patient - median: 10.00
+
+===== Dataset B =====
+Total patients: 20000
+Patients with sepsis: 1142
+First sepsis hour - minimum: 1.00
+First sepsis hour - maximum: 331.00
+First sepsis hour - average: 50.00
+First sepsis hour - median: 28.50
+Positive hours per patient - minimum: 1
+Positive hours per patient - maximum: 10
+Positive hours per patient - average: 9.44
+Positive hours per patient - median: 10.00
+
+===== COMBINED TIMING SUMMARY =====
+Total patients with sepsis: 2932
+First sepsis hour - minimum: 1.00
+First sepsis hour - maximum: 331.00
+First sepsis hour - average: 50.00
+First sepsis hour - median: 29.00
+Positive hours per patient - minimum: 1
+Positive hours per patient - maximum: 10
+Positive hours per patient - average: 9.52
+Positive hours per patient - median: 10.00

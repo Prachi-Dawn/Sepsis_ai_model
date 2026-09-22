@@ -1,0 +1,40 @@
+# Raw datasets
+DataSets/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+env/
+.venv/
+re_env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Model files
+*.pkl
+*.joblib
+*.h5
+*.keras
+*.pth
+
+# Large generated files
+*.zip
+*.tar
+*.gz
+
+# Local IDE files
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.log
