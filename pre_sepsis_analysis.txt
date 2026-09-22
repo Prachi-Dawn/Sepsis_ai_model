@@ -1,0 +1,37 @@
+
+===== Dataset A =====
+Sepsis patients: 1790
+Pre-sepsis hours - minimum: 0
+Pre-sepsis hours - maximum: 330
+Pre-sepsis hours - average: 49.00
+Pre-sepsis hours - median: 28.50
+
+First sepsis hour distribution:
+0-6 hours: 380
+7-12 hours: 194
+13-24 hours: 250
+25-48 hours: 293
+49-72 hours: 224
+73+ hours: 449
+
+===== Dataset B =====
+Sepsis patients: 1142
+Pre-sepsis hours - minimum: 0
+Pre-sepsis hours - maximum: 330
+Pre-sepsis hours - average: 49.00
+Pre-sepsis hours - median: 27.50
+
+First sepsis hour distribution:
+0-6 hours: 326
+7-12 hours: 72
+13-24 hours: 129
+25-48 hours: 216
+49-72 hours: 104
+73+ hours: 295
+
+===== COMBINED =====
+Total sepsis patients: 2932
+Pre-sepsis hours - minimum: 0
+Pre-sepsis hours - maximum: 330
+Pre-sepsis hours - average: 49.00
+Pre-sepsis hours - median: 28.00

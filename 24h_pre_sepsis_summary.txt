@@ -1,0 +1,275 @@
+========================================
+24-HOUR PRE-SEPSIS ANALYSIS
+========================================
+Patients with usable pre-sepsis data: 2506
+Total observations analyzed: 46934
+
+Relative hours:
+-24 = 24 hours before first positive label
+-1 = 1 hour before first positive label
+
+Patients contributing at each hour:
+-24 hours: 1563 patients
+-23 hours: 1598 patients
+-22 hours: 1618 patients
+-21 hours: 1640 patients
+-20 hours: 1663 patients
+-19 hours: 1696 patients
+-18 hours: 1723 patients
+-17 hours: 1757 patients
+-16 hours: 1786 patients
+-15 hours: 1825 patients
+-14 hours: 1849 patients
+-13 hours: 1892 patients
+-12 hours: 1939 patients
+-11 hours: 1984 patients
+-10 hours: 2013 patients
+-9 hours: 2051 patients
+-8 hours: 2104 patients
+-7 hours: 2154 patients
+-6 hours: 2199 patients
+-5 hours: 2264 patients
+-4 hours: 2317 patients
+-3 hours: 2363 patients
+-2 hours: 2430 patients
+-1 hours: 2506 patients
+
+Early vs late pre-sepsis comparison:
+
+HR
+  24–13h mean: 88.130
+  12–1h mean: 89.009
+  Mean change: 0.879
+  Early missing: 6.68%
+  Late missing: 7.99%
+
+O2Sat
+  24–13h mean: 97.261
+  12–1h mean: 97.136
+  Mean change: -0.124
+  Early missing: 8.79%
+  Late missing: 10.07%
+
+Temp
+  24–13h mean: 37.114
+  12–1h mean: 37.134
+  Mean change: 0.020
+  Early missing: 64.83%
+  Late missing: 66.18%
+
+SBP
+  24–13h mean: 124.210
+  12–1h mean: 123.315
+  Mean change: -0.894
+  Early missing: 13.84%
+  Late missing: 15.59%
+
+MAP
+  24–13h mean: 81.540
+  12–1h mean: 81.187
+  Mean change: -0.353
+  Early missing: 8.34%
+  Late missing: 9.50%
+
+DBP
+  24–13h mean: 62.512
+  12–1h mean: 62.629
+  Mean change: 0.116
+  Early missing: 25.74%
+  Late missing: 29.19%
+
+Resp
+  24–13h mean: 19.958
+  12–1h mean: 20.265
+  Mean change: 0.308
+  Early missing: 12.52%
+  Late missing: 13.90%
+
+EtCO2
+  24–13h mean: 32.886
+  12–1h mean: 33.086
+  Mean change: 0.200
+  Early missing: 90.21%
+  Late missing: 90.86%
+
+BaseExcess
+  24–13h mean: -0.136
+  12–1h mean: -0.198
+  Mean change: -0.062
+  Early missing: 92.20%
+  Late missing: 92.03%
+
+HCO3
+  24–13h mean: 24.014
+  12–1h mean: 24.196
+  Mean change: 0.182
+  Early missing: 94.10%
+  Late missing: 94.52%
+
+FiO2
+  24–13h mean: 0.524
+  12–1h mean: 0.529
+  Mean change: 0.005
+  Early missing: 83.99%
+  Late missing: 84.47%
+
+pH
+  24–13h mean: 7.389
+  12–1h mean: 7.385
+  Mean change: -0.005
+  Early missing: 90.23%
+  Late missing: 90.16%
+
+PaCO2
+  24–13h mean: 40.647
+  12–1h mean: 41.157
+  Mean change: 0.511
+  Early missing: 92.26%
+  Late missing: 92.03%
+
+SaO2
+  24–13h mean: 93.622
+  12–1h mean: 93.108
+  Mean change: -0.515
+  Early missing: 95.91%
+  Late missing: 95.75%
+
+AST
+  24–13h mean: 286.872
+  12–1h mean: 324.648
+  Mean change: 37.776
+  Early missing: 97.89%
+  Late missing: 97.88%
+
+BUN
+  24–13h mean: 29.285
+  12–1h mean: 28.916
+  Mean change: -0.369
+  Early missing: 91.86%
+  Late missing: 92.47%
+
+Alkalinephos
+  24–13h mean: 110.784
+  12–1h mean: 109.268
+  Mean change: -1.517
+  Early missing: 97.91%
+  Late missing: 97.89%
+
+Calcium
+  24–13h mean: 7.198
+  12–1h mean: 7.222
+  Mean change: 0.024
+  Early missing: 92.62%
+  Late missing: 93.34%
+
+Chloride
+  24–13h mean: 105.575
+  12–1h mean: 105.924
+  Mean change: 0.349
+  Early missing: 93.57%
+  Late missing: 94.05%
+
+Creatinine
+  24–13h mean: 1.590
+  12–1h mean: 1.610
+  Mean change: 0.020
+  Early missing: 93.25%
+  Late missing: 93.68%
+
+Bilirubin_direct
+  24–13h mean: 1.945
+  12–1h mean: 2.582
+  Mean change: 0.637
+  Early missing: 99.78%
+  Late missing: 99.79%
+
+Glucose
+  24–13h mean: 137.911
+  12–1h mean: 137.486
+  Mean change: -0.426
+  Early missing: 82.26%
+  Late missing: 83.59%
+
+Lactate
+  24–13h mean: 2.531
+  12–1h mean: 2.544
+  Mean change: 0.014
+  Early missing: 95.41%
+  Late missing: 95.32%
+
+Magnesium
+  24–13h mean: 2.092
+  12–1h mean: 2.087
+  Mean change: -0.005
+  Early missing: 91.86%
+  Late missing: 92.63%
+
+Phosphate
+  24–13h mean: 3.579
+  12–1h mean: 3.638
+  Mean change: 0.059
+  Early missing: 94.46%
+  Late missing: 95.08%
+
+Potassium
+  24–13h mean: 4.075
+  12–1h mean: 4.097
+  Mean change: 0.022
+  Early missing: 88.99%
+  Late missing: 89.43%
+
+Bilirubin_total
+  24–13h mean: 3.294
+  12–1h mean: 2.659
+  Mean change: -0.635
+  Early missing: 98.21%
+  Late missing: 98.20%
+
+TroponinI
+  24–13h mean: 15.700
+  12–1h mean: 9.283
+  Mean change: -6.417
+  Early missing: 99.38%
+  Late missing: 99.35%
+
+Hct
+  24–13h mean: 30.031
+  12–1h mean: 30.075
+  Mean change: 0.044
+  Early missing: 90.66%
+  Late missing: 90.83%
+
+Hgb
+  24–13h mean: 10.146
+  12–1h mean: 10.145
+  Mean change: -0.000
+  Early missing: 91.99%
+  Late missing: 92.25%
+
+PTT
+  24–13h mean: 43.651
+  12–1h mean: 44.721
+  Mean change: 1.070
+  Early missing: 96.27%
+  Late missing: 96.24%
+
+WBC
+  24–13h mean: 12.676
+  12–1h mean: 12.783
+  Mean change: 0.107
+  Early missing: 92.71%
+  Late missing: 93.14%
+
+Fibrinogen
+  24–13h mean: 302.221
+  12–1h mean: 313.692
+  Mean change: 11.472
+  Early missing: 99.34%
+  Late missing: 99.08%
+
+Platelets
+  24–13h mean: 195.320
+  12–1h mean: 195.822
+  Mean change: 0.501
+  Early missing: 93.71%
+  Late missing: 93.96%
