@@ -1,0 +1,39 @@
+SEPSIS AI MODEL – EXPLORATORY ANALYSIS
+
+Dataset:
+- Dataset A: 20,336 patients
+- Dataset B: 20,000 patients
+- Combined: 40,336 patients
+- Combined sepsis patients: 2,932
+- Combined non-sepsis patients: 37,404
+
+Sepsis timing:
+- Median first sepsis hour: 29
+- First sepsis hour range: 1–331
+- Some patients have sepsis labels from the first ICU hour.
+
+Pre-sepsis:
+- 2,506 sepsis patients have at least 24 hours of pre-sepsis history.
+- Pre-sepsis history varies substantially between patients.
+- Many laboratory variables have high missingness.
+
+Prediction targets investigated:
+- Current-state prediction
+- 6-hour future prediction
+- 12-hour future prediction
+
+6-hour target:
+- 2,226 usable sepsis patients
+- 706 early-onset patients excluded
+- 37,404 non-sepsis patients
+- 39,630 usable patients
+
+12-hour target:
+- 1,960 usable sepsis patients
+- 972 early-onset patients excluded
+- 37,404 non-sepsis patients
+- 39,364 usable patients
+
+Decision pending:
+- Final prediction horizon: 6 hours vs 12 hours
+- To be confirmed with research supervisor.
