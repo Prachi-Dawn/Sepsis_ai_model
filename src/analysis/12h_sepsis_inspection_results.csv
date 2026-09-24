@@ -1,0 +1,21 @@
+Patient,Dataset,First_Sepsis_Row,12_Hour_Target_Row,Total_Rows
+p000009.psv,Dataset A,248,236,258
+p000011.psv,Dataset A,24,12,34
+p000018.psv,Dataset A,125,113,134
+p000028.psv,Dataset A,21,9,31
+p000042.psv,Dataset A,63,51,73
+p000053.psv,Dataset A,15,3,25
+p000064.psv,Dataset A,19,7,28
+p000078.psv,Dataset A,94,82,104
+p000141.psv,Dataset A,51,39,61
+p000161.psv,Dataset A,13,1,23
+p000171.psv,Dataset A,59,47,69
+p000178.psv,Dataset A,87,75,97
+p000185.psv,Dataset A,55,43,65
+p000188.psv,Dataset A,75,63,84
+p000203.psv,Dataset A,71,59,81
+p000206.psv,Dataset A,13,1,23
+p000265.psv,Dataset A,52,40,62
+p000272.psv,Dataset A,90,78,100
+p000283.psv,Dataset A,32,20,41
+p000286.psv,Dataset A,84,72,94

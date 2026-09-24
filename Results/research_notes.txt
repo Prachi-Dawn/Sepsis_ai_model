@@ -36,4 +36,4 @@ Prediction targets investigated:
 
 Decision pending:
 - Final prediction horizon: 6 hours vs 12 hours
-- To be confirmed with research supervisor.
+- To be confirmed.

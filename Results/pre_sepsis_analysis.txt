@@ -29,9 +29,9 @@ First sepsis hour distribution:
 49-72 hours: 104
 73+ hours: 295
 
-===== COMBINED =====
+===== COMBINED ===== 
 Total sepsis patients: 2932
-Pre-sepsis hours - minimum: 0
+Pre-sepsis hours - minimum: 0   
 Pre-sepsis hours - maximum: 330
 Pre-sepsis hours - average: 49.00
 Pre-sepsis hours - median: 28.00

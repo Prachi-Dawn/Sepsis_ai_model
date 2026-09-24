@@ -1,0 +1,3 @@
+Dataset,Total_Patients,Sepsis_Patients,Early_Sepsis_Excluded,Usable_Sepsis_Patients,Non_Sepsis_Patients,Usable_Total_Patients,Total_Usable_Rows,Positive_12h_Rows,Negative_12h_Rows
+Dataset A,20336,1790,574,1216,18546,19762,771125,14552,756573
+Dataset B,20000,1142,398,744,18858,19602,750324,8927,741397
