@@ -38,3 +38,9 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.log
+
+
+# Generated datasets
+Results/ml_dataset/*.csv
+Results/preprocessed/*.csv
+Results/data_quality/*.csv
