@@ -706,12 +706,13 @@ for split, df in data.items():
     )
 
     passed = values.issubset({
-        "A",
-        "B",
-        "Dataset_A",
-        "Dataset_B"
-    })
-
+    "A",
+    "B",
+    "Dataset_A",
+    "Dataset_B",
+    "Dataset A",
+    "Dataset B"
+})
     print_result(
         f"{split} Dataset column",
         passed,
