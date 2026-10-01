@@ -1,170 +1,219 @@
-import os
-import numpy as np
+"""
+TabNet-GRU Hybrid Model for Sepsis Prediction
+- Multi-step sparse attention TabNet encoder (3 decision steps)
+- Unidirectional GRU temporal module
+- Focal loss + moderate class weighting
+- Training with proper early stopping
+"""
+
 import torch
 import torch.nn as nn
-from torch.utils.data import Dataset, DataLoader
-from sklearn.metrics import (
-    roc_auc_score,
-    average_precision_score,
-    precision_score,
-    recall_score,
-    f1_score,
-    confusion_matrix
-)
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, TensorDataset
+import numpy as np
+import os
+import json
+import time
+from datetime import datetime
 
 
 # ============================================================
-# CONFIGURATION
+# SPARSEMAX ACTIVATION (replaces Softmax for sparse attention)
 # ============================================================
-
-PROJECT_ROOT = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "..", "..")
-)
-
-DATA_FOLDER = os.path.join(
-    PROJECT_ROOT,
-    "Results",
-    "training_arrays"
-)
-
-MODEL_FOLDER = os.path.join(
-    PROJECT_ROOT,
-    "Results",
-    "models"
-)
-
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-INPUT_FEATURES = 73
-SEQUENCE_LENGTH = 12
-
-TABNET_DIM = 128
-GRU_HIDDEN = 128
-
-DROPOUT = 0.3
-
-BATCH_SIZE = 64
-LEARNING_RATE = 0.001
-WEIGHT_DECAY = 1e-5
-
-EPOCHS = 3
-PATIENCE = 2
-
-NUM_WORKERS = 0
-
-os.makedirs(
-    MODEL_FOLDER,
-    exist_ok=True
-)
-
-
-# ============================================================
-# DATASET
-# ============================================================
-
-class SepsisDataset(Dataset):
-
-    def __init__(self, x_path, y_path):
-
-        self.X = np.load(
-            x_path,
-            mmap_mode="r"
-        )
-
-        self.y = np.load(
-            y_path,
-            mmap_mode="r"
-        )
-
-    def __len__(self):
-        return len(self.y)
-
-    def __getitem__(self, index):
-
-        x = np.asarray(
-            self.X[index],
-            dtype=np.float32
-        )
-
-        y = np.float32(
-            self.y[index]
-        )
-
-        return (
-            torch.from_numpy(x),
-            torch.tensor(y)
-        )
-
-
-# ============================================================
-# TABNET-STYLE ENCODER
-# ============================================================
-
-class TabNetStyleEncoder(nn.Module):
-
-    def __init__(
-        self,
-        input_dim,
-        embedding_dim
-    ):
-
+class Sparsemax(nn.Module):
+    """Sparsemax activation function (Martins & Astudillo, 2016)."""
+    def __init__(self, dim=-1):
         super().__init__()
-
-        self.feature_transform = nn.Sequential(
-            nn.Linear(input_dim, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-
-            nn.Linear(128, embedding_dim),
-            nn.BatchNorm1d(embedding_dim),
-            nn.ReLU()
-        )
-
-        self.attention = nn.Sequential(
-            nn.Linear(input_dim, input_dim),
-            nn.Softmax(dim=1)
-        )
+        self.dim = dim
 
     def forward(self, x):
+        sorted_x, _ = torch.sort(x, descending=True, dim=self.dim)
+        cumsum = torch.cumsum(sorted_x, dim=self.dim)
+        k = torch.arange(1, x.size(self.dim) + 1, device=x.device, dtype=x.dtype)
 
-        attention_mask = self.attention(x)
+        # Reshape k for broadcasting
+        shape = [1] * x.dim()
+        shape[self.dim] = -1
+        k = k.reshape(shape)
 
-        x_selected = x * attention_mask
+        support = (sorted_x - (cumsum - 1) / k) > 0
+        k_max = support.sum(dim=self.dim, keepdim=True).float()
+        tau = (cumsum.gather(self.dim, (k_max - 1).long().clamp(min=0)) - 1) / k_max
 
-        embedding = self.feature_transform(
-            x_selected
+        output = torch.clamp(x - tau, min=0)
+        return output
+
+
+# ============================================================
+# GHOST BATCH NORMALIZATION
+# ============================================================
+class GhostBatchNorm(nn.Module):
+    """Ghost Batch Normalization for TabNet."""
+    def __init__(self, n_features, virtual_batch_size=64, momentum=0.02):
+        super().__init__()
+        self.bn = nn.BatchNorm1d(n_features, momentum=momentum)
+        self.virtual_batch_size = virtual_batch_size
+
+    def forward(self, x):
+        if not self.training or x.size(0) <= self.virtual_batch_size:
+            return self.bn(x)
+
+        chunks = x.chunk(
+            max(1, x.size(0) // self.virtual_batch_size), dim=0
         )
-
-        return embedding
+        result = [self.bn(chunk) for chunk in chunks]
+        return torch.cat(result, dim=0)
 
 
 # ============================================================
-# TABNET-GRU MODEL
+# TABNET FEATURE TRANSFORMER
 # ============================================================
-
-class TabNetGRU(nn.Module):
-
-    def __init__(
-        self,
-        input_dim=73,
-        tabnet_dim=128,
-        gru_hidden=128,
-        dropout=0.3
-    ):
-
+class FeatureTransformer(nn.Module):
+    """Shared + step-specific feature transformer block."""
+    def __init__(self, input_dim, output_dim, shared_layers=None, virtual_batch_size=64):
         super().__init__()
 
-        self.tabnet = TabNetStyleEncoder(
+        # Shared layers (across all steps)
+        if shared_layers is not None:
+            self.shared_fc = shared_layers
+        else:
+            self.shared_fc = nn.Linear(input_dim, output_dim, bias=False)
+
+        # Step-specific layers
+        self.step_fc = nn.Linear(output_dim, output_dim, bias=False)
+        self.bn1 = GhostBatchNorm(output_dim, virtual_batch_size)
+        self.bn2 = GhostBatchNorm(output_dim, virtual_batch_size)
+
+    def forward(self, x):
+        x = self.shared_fc(x)
+        x = self.bn1(x)
+        x = F.relu(x)
+        x = self.step_fc(x)
+        x = self.bn2(x)
+        x = F.relu(x)
+        return x
+
+
+# ============================================================
+# MULTI-STEP TABNET ENCODER
+# ============================================================
+class TabNetEncoder(nn.Module):
+    """
+    Multi-step TabNet encoder with sparse attention.
+    Implements N_steps decision steps with complementary attention masks.
+    """
+    def __init__(self, input_dim, embed_dim=128, n_steps=3,
+                 relaxation_factor=1.5, virtual_batch_size=64,
+                 sparsity_coefficient=1e-3):
+        super().__init__()
+        self.input_dim = input_dim
+        self.embed_dim = embed_dim
+        self.n_steps = n_steps
+        self.relaxation_factor = relaxation_factor
+        self.sparsity_coefficient = sparsity_coefficient
+
+        # Initial batch normalization
+        self.initial_bn = nn.BatchNorm1d(input_dim)
+
+        # Shared feature transformer layer (shared across steps)
+        self.shared_fc = nn.Linear(input_dim, embed_dim, bias=False)
+
+        # Step-specific components
+        self.feature_transformers = nn.ModuleList()
+        self.attention_transformers = nn.ModuleList()
+
+        for step in range(n_steps):
+            # Feature transformer for each step
+            self.feature_transformers.append(
+                FeatureTransformer(
+                    input_dim, embed_dim,
+                    shared_layers=self.shared_fc,
+                    virtual_batch_size=virtual_batch_size
+                )
+            )
+
+            # Attention transformer for each step
+            self.attention_transformers.append(nn.Sequential(
+                nn.Linear(embed_dim, input_dim, bias=False),
+                GhostBatchNorm(input_dim, virtual_batch_size)
+            ))
+
+        self.sparsemax = Sparsemax(dim=-1)
+
+    def forward(self, x):
+        batch_size = x.size(0)
+        x = self.initial_bn(x)
+
+        # Initialize
+        prior_scales = torch.ones(batch_size, self.input_dim, device=x.device)
+        aggregated_output = torch.zeros(batch_size, self.embed_dim, device=x.device)
+        entropy_loss = 0.0
+
+        # Compute initial features for attention
+        h = self.feature_transformers[0](x)
+
+        for step in range(self.n_steps):
+            # Attention mask
+            attention_input = self.attention_transformers[step](h)
+            attention_input = attention_input * prior_scales
+            attention_mask = self.sparsemax(attention_input)
+
+            # Update prior scales (complementary attention)
+            prior_scales = prior_scales * (self.relaxation_factor - attention_mask)
+
+            # Entropy loss for sparsity regularization
+            entropy_loss += torch.mean(
+                torch.sum(-attention_mask * torch.log(attention_mask + 1e-15), dim=-1)
+            )
+
+            # Masked features
+            masked_x = attention_mask * x
+
+            # Feature transformation
+            h = self.feature_transformers[step](masked_x)
+
+            # Aggregate
+            aggregated_output = aggregated_output + h
+
+        # Average over steps
+        aggregated_output = aggregated_output / self.n_steps
+
+        # Scale entropy loss
+        entropy_loss = self.sparsity_coefficient * entropy_loss / self.n_steps
+
+        return aggregated_output, entropy_loss
+
+
+# ============================================================
+# COMPLETE TabNet-GRU MODEL
+# ============================================================
+class TabNetGRU(nn.Module):
+    """
+    Hybrid TabNet-GRU for sequential sepsis prediction.
+    TabNet encoder processes each timestep -> GRU captures temporal patterns.
+    """
+    def __init__(self, input_dim=73, tabnet_dim=128, n_steps=3,
+                 gru_hidden=128, gru_layers=1, dropout=0.3,
+                 relaxation_factor=1.5, virtual_batch_size=64,
+                 sparsity_coefficient=1e-3):
+        super().__init__()
+
+        self.tabnet_encoder = TabNetEncoder(
             input_dim=input_dim,
-            embedding_dim=tabnet_dim
+            embed_dim=tabnet_dim,
+            n_steps=n_steps,
+            relaxation_factor=relaxation_factor,
+            virtual_batch_size=virtual_batch_size,
+            sparsity_coefficient=sparsity_coefficient
         )
 
         self.gru = nn.GRU(
             input_size=tabnet_dim,
             hidden_size=gru_hidden,
-            num_layers=1,
+            num_layers=gru_layers,
             batch_first=True,
-            bidirectional=False
+            bidirectional=False,
+            dropout=0.0
         )
 
         self.classifier = nn.Sequential(
@@ -175,492 +224,509 @@ class TabNetGRU(nn.Module):
         )
 
     def forward(self, x):
+        """
+        x: (batch, seq_len, features)
+        """
+        batch_size, seq_len, n_features = x.shape
 
-        batch_size, sequence_length, feature_count = x.shape
+        # Process each timestep through TabNet encoder
+        tabnet_outputs = []
+        total_entropy_loss = 0.0
 
-        x = x.reshape(
-            batch_size * sequence_length,
-            feature_count
-        )
+        for t in range(seq_len):
+            timestep_data = x[:, t, :]  # (batch, features)
+            encoded, entropy = self.tabnet_encoder(timestep_data)
+            tabnet_outputs.append(encoded)
+            total_entropy_loss += entropy
 
-        embeddings = self.tabnet(x)
+        total_entropy_loss = total_entropy_loss / seq_len
 
-        embeddings = embeddings.reshape(
-            batch_size,
-            sequence_length,
-            -1
-        )
+        # Stack: (batch, seq_len, tabnet_dim)
+        tabnet_sequence = torch.stack(tabnet_outputs, dim=1)
 
-        gru_output, _ = self.gru(
-            embeddings
-        )
+        # GRU temporal processing
+        gru_out, _ = self.gru(tabnet_sequence)
 
-        final_output = gru_output[:, -1, :]
+        # Use last timestep output
+        last_hidden = gru_out[:, -1, :]  # (batch, gru_hidden)
 
-        logits = self.classifier(
-            final_output
-        )
+        # Classification
+        logit = self.classifier(last_hidden)  # (batch, 1)
 
-        return logits.squeeze(1)
-
-
-# ============================================================
-# METRICS
-# ============================================================
-
-def calculate_metrics(
-    y_true,
-    probabilities
-):
-
-    predictions = (
-        probabilities >= 0.5
-    ).astype(int)
-
-    roc_auc = roc_auc_score(
-        y_true,
-        probabilities
-    )
-
-    auprc = average_precision_score(
-        y_true,
-        probabilities
-    )
-
-    precision = precision_score(
-        y_true,
-        predictions,
-        zero_division=0
-    )
-
-    recall = recall_score(
-        y_true,
-        predictions,
-        zero_division=0
-    )
-
-    f1 = f1_score(
-        y_true,
-        predictions,
-        zero_division=0
-    )
-
-    tn, fp, fn, tp = confusion_matrix(
-        y_true,
-        predictions,
-        labels=[0, 1]
-    ).ravel()
-
-    specificity = (
-        tn / (tn + fp)
-        if (tn + fp) > 0
-        else 0
-    )
-
-    return {
-        "AUROC": roc_auc,
-        "AUPRC": auprc,
-        "Precision": precision,
-        "Recall": recall,
-        "F1": f1,
-        "Specificity": specificity,
-        "TN": tn,
-        "FP": fp,
-        "FN": fn,
-        "TP": tp
-    }
+        return logit, total_entropy_loss
 
 
 # ============================================================
-# VALIDATION
+# FOCAL LOSS (better for class imbalance than weighted BCE)
 # ============================================================
+class FocalLoss(nn.Module):
+    """
+    Focal Loss: focuses learning on hard-to-classify examples.
+    Reduces the contribution of easy negatives.
+    """
+    def __init__(self, alpha=1.0, gamma=2.0, pos_weight=None):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.pos_weight = pos_weight
 
-def evaluate(
-    model,
-    loader,
-    criterion
-):
+    def forward(self, logits, targets):
+        bce = F.binary_cross_entropy_with_logits(
+            logits, targets, reduction='none'
+        )
+        probs = torch.sigmoid(logits)
+        p_t = probs * targets + (1 - probs) * (1 - targets)
+        focal_weight = (1 - p_t) ** self.gamma
 
-    model.eval()
+        # Apply alpha weighting
+        if self.pos_weight is not None:
+            alpha_weight = targets * self.pos_weight + (1 - targets) * 1.0
+            focal_weight = focal_weight * alpha_weight
 
-    total_loss = 0
-    probabilities = []
-    targets = []
+        loss = focal_weight * bce
+        return loss.mean()
 
-    with torch.no_grad():
 
-        for X, y in loader:
+# ============================================================
+# METRICS COMPUTATION
+# ============================================================
+def compute_metrics(logits, labels, threshold=0.5):
+    """Compute all metrics from raw logits."""
+    probs = torch.sigmoid(logits).detach().cpu().numpy().flatten()
+    labels_np = labels.detach().cpu().numpy().flatten()
+    preds = (probs >= threshold).astype(int)
 
-            X = X.to(DEVICE)
-            y = y.to(DEVICE)
-
-            logits = model(X)
-
-            loss = criterion(
-                logits,
-                y
-            )
-
-            total_loss += (
-                loss.item() * len(y)
-            )
-
-            probs = torch.sigmoid(
-                logits
-            )
-
-            probabilities.extend(
-                probs.cpu().numpy()
-            )
-
-            targets.extend(
-                y.cpu().numpy()
-            )
-
-    probabilities = np.asarray(
-        probabilities
+    from sklearn.metrics import (
+        roc_auc_score, average_precision_score,
+        precision_score, recall_score, f1_score,
+        confusion_matrix
     )
 
-    targets = np.asarray(
-        targets
-    )
+    metrics = {}
 
-    metrics = calculate_metrics(
-        targets,
-        probabilities
-    )
+    try:
+        metrics['auroc'] = roc_auc_score(labels_np, probs)
+    except ValueError:
+        metrics['auroc'] = 0.0
 
-    metrics["Loss"] = (
-        total_loss / len(targets)
-    )
+    try:
+        metrics['auprc'] = average_precision_score(labels_np, probs)
+    except ValueError:
+        metrics['auprc'] = 0.0
+
+    metrics['precision'] = precision_score(labels_np, preds, zero_division=0)
+    metrics['recall'] = recall_score(labels_np, preds, zero_division=0)
+    metrics['f1'] = f1_score(labels_np, preds, zero_division=0)
+
+    if len(np.unique(labels_np)) == 2 and len(np.unique(preds)) >= 1:
+        tn, fp, fn, tp = confusion_matrix(labels_np, preds, labels=[0, 1]).ravel()
+    else:
+        tn = fp = fn = tp = 0
+
+    metrics['tp'] = int(tp)
+    metrics['fp'] = int(fp)
+    metrics['tn'] = int(tn)
+    metrics['fn'] = int(fn)
+    metrics['specificity'] = tn / (tn + fp) if (tn + fp) > 0 else 0.0
+    metrics['accuracy'] = (tp + tn) / (tp + fp + tn + fn) if (tp + fp + tn + fn) > 0 else 0.0
 
     return metrics
 
 
 # ============================================================
-# TRAINING
+# OPTIMAL THRESHOLD FINDER
 # ============================================================
+def find_optimal_threshold(model, dataloader, device):
+    """Find threshold that maximizes F1 on validation data."""
+    model.eval()
+    all_probs = []
+    all_labels = []
 
+    with torch.no_grad():
+        for batch_X, batch_y in dataloader:
+            batch_X = batch_X.to(device)
+            logits, _ = model(batch_X)
+            probs = torch.sigmoid(logits).cpu().numpy().flatten()
+            all_probs.extend(probs)
+            all_labels.extend(batch_y.numpy().flatten())
+
+    all_probs = np.array(all_probs)
+    all_labels = np.array(all_labels)
+
+    from sklearn.metrics import f1_score
+    best_f1 = 0
+    best_threshold = 0.5
+
+    for threshold in np.arange(0.05, 0.95, 0.01):
+        preds = (all_probs >= threshold).astype(int)
+        f1 = f1_score(all_labels, preds, zero_division=0)
+        if f1 > best_f1:
+            best_f1 = f1
+            best_threshold = threshold
+
+    return best_threshold, best_f1
+
+
+# ============================================================
+# TRAINING FUNCTION
+# ============================================================
 def train():
+    # === CONFIGURATION ===
+    CONFIG = {
+        "experiment": "exp002_standardized_multistep_focal",
+        "data_dir": "/content/drive/MyDrive/ai sepsis training/standardized",
+        "model_dir": "/content/drive/MyDrive/ai sepsis training/models",
+        "results_dir": "/content/drive/MyDrive/ai sepsis training/results",
+        # Architecture
+        "input_dim": 73,
+        "tabnet_dim": 128,
+        "n_steps": 3,
+        "gru_hidden": 128,
+        "gru_layers": 1,
+        "dropout": 0.3,
+        "relaxation_factor": 1.5,
+        "sparsity_coefficient": 1e-3,
+        "virtual_batch_size": 64,
+        # Training
+        "batch_size": 256,
+        "max_epochs": 15,
+        "patience": 5,
+        "learning_rate": 1e-3,
+        "weight_decay": 1e-5,
+        "focal_gamma": 2.0,
+        "pos_weight_cap": 10.0,  # Cap the positive weight to prevent collapse
+        # Device
+        "num_workers": 2,
+    }
 
-    print("=" * 70)
-    print("TABNET-GRU SEPSIS MODEL")
-    print("=" * 70)
+    # Create directories
+    os.makedirs(CONFIG["model_dir"], exist_ok=True)
+    os.makedirs(CONFIG["results_dir"], exist_ok=True)
 
-    print("\nDevice:", DEVICE)
+    # Device
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Device: {DEVICE}")
+    if torch.cuda.is_available():
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
 
-    # --------------------------------------------------------
-    # Load datasets
-    # --------------------------------------------------------
-    print("\nPROJECT_ROOT:", PROJECT_ROOT)
-    print("DATA_FOLDER:", DATA_FOLDER)
-    print("train_X path:", os.path.join(DATA_FOLDER, "train_X.npy"))
-    print("train_X exists:", os.path.exists(os.path.join(DATA_FOLDER, "train_X.npy")))
-    print("train_y path:", os.path.join(DATA_FOLDER, "train_y.npy"))
-    print("train_y exists:", os.path.exists(os.path.join(DATA_FOLDER, "train_y.npy")))
-    train_dataset = SepsisDataset(
-        os.path.join(
-            DATA_FOLDER,
-            "train_X.npy"
-        ),
-        os.path.join(
-            DATA_FOLDER,
-            "train_y.npy"
-        )
+    # === LOAD STANDARDIZED DATA ===
+    print("\n[1/6] Loading standardized data...")
+    data_dir = CONFIG["data_dir"]
+
+    train_X = np.load(os.path.join(data_dir, "train_X.npy"))
+    train_y = np.load(os.path.join(data_dir, "train_y.npy"))
+    val_X = np.load(os.path.join(data_dir, "val_X.npy"))
+    val_y = np.load(os.path.join(data_dir, "val_y.npy"))
+    test_X = np.load(os.path.join(data_dir, "test_X.npy"))
+    test_y = np.load(os.path.join(data_dir, "test_y.npy"))
+
+    print(f"  Train: X={train_X.shape}, y={train_y.shape}")
+    print(f"  Val:   X={val_X.shape},   y={val_y.shape}")
+    print(f"  Test:  X={test_X.shape},  y={test_y.shape}")
+
+    # === CLASS DISTRIBUTION ===
+    n_pos = int(train_y.sum())
+    n_neg = len(train_y) - n_pos
+    raw_weight = n_neg / n_pos if n_pos > 0 else 1.0
+    capped_weight = min(raw_weight, CONFIG["pos_weight_cap"])
+
+    print(f"\n[2/6] Class distribution:")
+    print(f"  Negative: {n_neg:,}")
+    print(f"  Positive: {n_pos:,}")
+    print(f"  Raw weight: {raw_weight:.2f}")
+    print(f"  Capped weight: {capped_weight:.2f} (cap={CONFIG['pos_weight_cap']})")
+
+    # === DATA LOADERS ===
+    print("\n[3/6] Creating data loaders...")
+    train_dataset = TensorDataset(
+        torch.FloatTensor(train_X),
+        torch.FloatTensor(train_y).unsqueeze(1)
     )
-
-    validation_dataset = SepsisDataset(
-        os.path.join(
-            DATA_FOLDER,
-            "validation_X.npy"
-        ),
-        os.path.join(
-            DATA_FOLDER,
-            "validation_y.npy"
-        )
+    val_dataset = TensorDataset(
+        torch.FloatTensor(val_X),
+        torch.FloatTensor(val_y).unsqueeze(1)
     )
-
-    print(
-        "\nTraining samples:",
-        len(train_dataset)
+    test_dataset = TensorDataset(
+        torch.FloatTensor(test_X),
+        torch.FloatTensor(test_y).unsqueeze(1)
     )
-
-    print(
-        "Validation samples:",
-        len(validation_dataset)
-    )
-
-    # --------------------------------------------------------
-    # DataLoaders
-    # --------------------------------------------------------
 
     train_loader = DataLoader(
-        train_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=True,
-        num_workers=NUM_WORKERS
+        train_dataset, batch_size=CONFIG["batch_size"],
+        shuffle=True, num_workers=CONFIG["num_workers"],
+        pin_memory=True, drop_last=True
     )
-
-    validation_loader = DataLoader(
-        validation_dataset,
-        batch_size=BATCH_SIZE,
-        shuffle=False,
-        num_workers=NUM_WORKERS
+    val_loader = DataLoader(
+        val_dataset, batch_size=CONFIG["batch_size"],
+        shuffle=False, num_workers=CONFIG["num_workers"],
+        pin_memory=True
     )
-
-    # --------------------------------------------------------
-    # Calculate class weight
-    # --------------------------------------------------------
-
-    train_y = np.load(
-        os.path.join(
-            DATA_FOLDER,
-            "train_y.npy"
-        ),
-        mmap_mode="r"
+    test_loader = DataLoader(
+        test_dataset, batch_size=CONFIG["batch_size"],
+        shuffle=False, num_workers=CONFIG["num_workers"],
+        pin_memory=True
     )
+    print(f"  Train batches: {len(train_loader)}")
+    print(f"  Val batches: {len(val_loader)}")
+    print(f"  Test batches: {len(test_loader)}")
 
-    positive_count = np.sum(
-        train_y == 1
-    )
-
-    negative_count = np.sum(
-        train_y == 0
-    )
-
-    positive_weight = (
-        negative_count / positive_count
-    )
-
-    print("\nClass distribution:")
-    print(
-        "Negative:",
-        f"{negative_count:,}"
-    )
-
-    print(
-        "Positive:",
-        f"{positive_count:,}"
-    )
-
-    print(
-        "Positive class weight:",
-        f"{positive_weight:.2f}"
-    )
-
-    # --------------------------------------------------------
-    # Model
-    # --------------------------------------------------------
-
+    # === MODEL ===
+    print("\n[4/6] Building model...")
     model = TabNetGRU(
-        input_dim=INPUT_FEATURES,
-        tabnet_dim=TABNET_DIM,
-        gru_hidden=GRU_HIDDEN,
-        dropout=DROPOUT
+        input_dim=CONFIG["input_dim"],
+        tabnet_dim=CONFIG["tabnet_dim"],
+        n_steps=CONFIG["n_steps"],
+        gru_hidden=CONFIG["gru_hidden"],
+        gru_layers=CONFIG["gru_layers"],
+        dropout=CONFIG["dropout"],
+        relaxation_factor=CONFIG["relaxation_factor"],
+        virtual_batch_size=CONFIG["virtual_batch_size"],
+        sparsity_coefficient=CONFIG["sparsity_coefficient"]
     ).to(DEVICE)
 
-    print("\nModel:")
-    print(model)
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"  Total parameters: {total_params:,}")
+    print(f"  Trainable parameters: {trainable_params:,}")
 
-    total_parameters = sum(
-        p.numel()
-        for p in model.parameters()
-        if p.requires_grad
+    # === LOSS & OPTIMIZER ===
+    criterion = FocalLoss(
+        alpha=1.0,
+        gamma=CONFIG["focal_gamma"],
+        pos_weight=torch.tensor(capped_weight).to(DEVICE)
     )
-
-    print(
-        "\nTrainable parameters:",
-        f"{total_parameters:,}"
-    )
-
-    # --------------------------------------------------------
-    # Loss
-    # --------------------------------------------------------
-
-    pos_weight = torch.tensor(
-        [positive_weight],
-        dtype=torch.float32,
-        device=DEVICE
-    )
-
-    criterion = nn.BCEWithLogitsLoss(
-        pos_weight=pos_weight
-    )
-
-    # --------------------------------------------------------
-    # Optimizer
-    # --------------------------------------------------------
 
     optimizer = torch.optim.Adam(
         model.parameters(),
-        lr=LEARNING_RATE,
-        weight_decay=WEIGHT_DECAY
+        lr=CONFIG["learning_rate"],
+        weight_decay=CONFIG["weight_decay"]
     )
 
-    # --------------------------------------------------------
-    # Training
-    # --------------------------------------------------------
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='max', factor=0.5, patience=2, verbose=True
+    )
 
-    best_auprc = -1
+    print(f"  Loss: Focal Loss (gamma={CONFIG['focal_gamma']}, pos_weight={capped_weight:.2f})")
+    print(f"  Optimizer: Adam (lr={CONFIG['learning_rate']}, wd={CONFIG['weight_decay']})")
+    print(f"  Scheduler: ReduceLROnPlateau (patience=2, factor=0.5)")
+
+    # === TRAINING LOOP ===
+    print("\n[5/6] Training...")
+    print("=" * 100)
+
+    best_auprc = 0.0
+    best_epoch = 0
     patience_counter = 0
+    training_history = []
 
-    for epoch in range(
-        1,
-        EPOCHS + 1
-    ):
+    checkpoint_path = os.path.join(
+        CONFIG["model_dir"],
+        f"best_tabnet_gru_{CONFIG['experiment']}.pt"
+    )
 
+    for epoch in range(1, CONFIG["max_epochs"] + 1):
+        epoch_start = time.time()
+
+        # --- Train ---
         model.train()
+        train_loss_sum = 0.0
+        train_batches = 0
 
-        running_loss = 0
-
-        for batch_index, (X, y) in enumerate(
-            train_loader,
-            start=1
-        ):
-
-            X = X.to(DEVICE)
-            y = y.to(DEVICE)
+        for batch_X, batch_y in train_loader:
+            batch_X = batch_X.to(DEVICE)
+            batch_y = batch_y.to(DEVICE)
 
             optimizer.zero_grad()
-
-            logits = model(X)
-
-            loss = criterion(
-                logits,
-                y
-            )
-
+            logits, entropy_loss = model(batch_X)
+            classification_loss = criterion(logits, batch_y)
+            loss = classification_loss + entropy_loss
             loss.backward()
+
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
             optimizer.step()
 
-            running_loss += (
-                loss.item() * len(y)
-            )
+            train_loss_sum += loss.item()
+            train_batches += 1
 
-            if batch_index % 500 == 0:
+        avg_train_loss = train_loss_sum / train_batches
 
-                print(
-                    f"Epoch {epoch} | "
-                    f"Batch {batch_index}/{len(train_loader)} | "
-                    f"Loss {loss.item():.4f}"
-                )
+        # --- Validate ---
+        model.eval()
+        val_loss_sum = 0.0
+        val_batches = 0
+        all_val_logits = []
+        all_val_labels = []
 
-        train_loss = (
-            running_loss /
-            len(train_dataset)
-        )
+        with torch.no_grad():
+            for batch_X, batch_y in val_loader:
+                batch_X = batch_X.to(DEVICE)
+                batch_y = batch_y.to(DEVICE)
 
-        validation_metrics = evaluate(
-            model,
-            validation_loader,
-            criterion
-        )
+                logits, entropy_loss = model(batch_X)
+                classification_loss = criterion(logits, batch_y)
+                loss = classification_loss + entropy_loss
 
-        print("\n" + "-" * 70)
+                val_loss_sum += loss.item()
+                val_batches += 1
+                all_val_logits.append(logits.cpu())
+                all_val_labels.append(batch_y.cpu())
 
-        print(
-            f"Epoch {epoch}/{EPOCHS}"
-        )
+        avg_val_loss = val_loss_sum / val_batches
+        all_val_logits = torch.cat(all_val_logits)
+        all_val_labels = torch.cat(all_val_labels)
 
-        print(
-            f"Train Loss: "
-            f"{train_loss:.4f}"
-        )
+        val_metrics = compute_metrics(all_val_logits, all_val_labels)
+        epoch_time = time.time() - epoch_start
 
-        print(
-            f"Validation Loss: "
-            f"{validation_metrics['Loss']:.4f}"
-        )
+        # Scheduler step
+        scheduler.step(val_metrics['auprc'])
 
-        print(
-            f"AUROC: "
-            f"{validation_metrics['AUROC']:.4f}"
-        )
+        # Logging
+        current_lr = optimizer.param_groups[0]['lr']
+        print(f"Epoch {epoch:2d}/{CONFIG['max_epochs']} | "
+              f"Time: {epoch_time:.0f}s | "
+              f"LR: {current_lr:.6f} | "
+              f"Train Loss: {avg_train_loss:.4f} | "
+              f"Val Loss: {avg_val_loss:.4f} | "
+              f"AUROC: {val_metrics['auroc']:.4f} | "
+              f"AUPRC: {val_metrics['auprc']:.4f} | "
+              f"Recall: {val_metrics['recall']:.4f} | "
+              f"Prec: {val_metrics['precision']:.4f} | "
+              f"F1: {val_metrics['f1']:.4f} | "
+              f"Spec: {val_metrics['specificity']:.4f}")
 
-        print(
-            f"AUPRC: "
-            f"{validation_metrics['AUPRC']:.4f}"
-        )
+        # Save history
+        training_history.append({
+            "epoch": epoch,
+            "train_loss": avg_train_loss,
+            "val_loss": avg_val_loss,
+            "lr": current_lr,
+            **val_metrics,
+            "time_seconds": epoch_time
+        })
 
-        print(
-            f"Precision: "
-            f"{validation_metrics['Precision']:.4f}"
-        )
-
-        print(
-            f"Recall: "
-            f"{validation_metrics['Recall']:.4f}"
-        )
-
-        print(
-            f"F1: "
-            f"{validation_metrics['F1']:.4f}"
-        )
-
-        print(
-            f"Specificity: "
-            f"{validation_metrics['Specificity']:.4f}"
-        )
-
-        print("-" * 70)
-
-        # ----------------------------------------------------
-        # Save best model
-        # ----------------------------------------------------
-
-        if validation_metrics["AUPRC"] > best_auprc:
-
-            best_auprc = validation_metrics[
-                "AUPRC"
-            ]
-
+        # Checkpoint
+        if val_metrics['auprc'] > best_auprc:
+            best_auprc = val_metrics['auprc']
+            best_epoch = epoch
             patience_counter = 0
-
-            model_path = os.path.join(
-                MODEL_FOLDER,
-                "best_tabnet_gru.pt"
-            )
-
-            torch.save(
-                {
-                    "model_state_dict": model.state_dict(),
-                    "input_features": INPUT_FEATURES,
-                    "sequence_length": SEQUENCE_LENGTH,
-                    "tabnet_dim": TABNET_DIM,
-                    "gru_hidden": GRU_HIDDEN,
-                    "dropout": DROPOUT
-                },
-                model_path
-            )
-
-            print(
-                "\nBest model saved."
-            )
-
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'val_metrics': val_metrics,
+                'config': CONFIG
+            }, checkpoint_path)
+            print(f"  >>> New best AUPRC: {best_auprc:.6f} — checkpoint saved")
         else:
-
             patience_counter += 1
+            print(f"  --- No improvement ({patience_counter}/{CONFIG['patience']})")
 
-            print(
-                f"\nNo AUPRC improvement. "
-                f"Patience: {patience_counter}/{PATIENCE}"
-            )
-
-        if patience_counter >= PATIENCE:
-
-            print(
-                "\nEarly stopping."
-            )
-
+        if patience_counter >= CONFIG["patience"]:
+            print(f"\nEarly stopping at epoch {epoch}. Best epoch: {best_epoch}")
             break
 
-    print("\n" + "=" * 70)
-    print("TRAINING COMPLETE")
-    print("=" * 70)
+    print("=" * 100)
+    print(f"Training complete. Best epoch: {best_epoch}, Best AUPRC: {best_auprc:.6f}")
+
+    # === TEST EVALUATION ===
+    print("\n[6/6] Test evaluation...")
+
+    # Load best checkpoint
+    checkpoint = torch.load(checkpoint_path, map_location=DEVICE, weights_only=False)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.eval()
+
+    # Find optimal threshold on validation
+    print("  Finding optimal threshold on validation set...")
+    best_threshold, best_val_f1 = find_optimal_threshold(model, val_loader, DEVICE)
+    print(f"  Optimal threshold: {best_threshold:.2f} (val F1: {best_val_f1:.4f})")
+
+    # Test with default threshold (0.5)
+    all_test_logits = []
+    all_test_labels = []
+    test_loss_sum = 0.0
+    test_batches = 0
+
+    with torch.no_grad():
+        for batch_X, batch_y in test_loader:
+            batch_X = batch_X.to(DEVICE)
+            batch_y = batch_y.to(DEVICE)
+
+            logits, entropy_loss = model(batch_X)
+            classification_loss = criterion(logits, batch_y)
+            loss = classification_loss + entropy_loss
+
+            test_loss_sum += loss.item()
+            test_batches += 1
+            all_test_logits.append(logits.cpu())
+            all_test_labels.append(batch_y.cpu())
+
+    all_test_logits = torch.cat(all_test_logits)
+    all_test_labels = torch.cat(all_test_labels)
+
+    # Metrics at default threshold
+    test_metrics_default = compute_metrics(all_test_logits, all_test_labels, threshold=0.5)
+    # Metrics at optimal threshold
+    test_metrics_optimal = compute_metrics(all_test_logits, all_test_labels, threshold=best_threshold)
+
+    avg_test_loss = test_loss_sum / test_batches
+
+    print("\n" + "=" * 60)
+    print("TEST RESULTS (threshold=0.50)")
+    print("=" * 60)
+    print(f"  Loss:        {avg_test_loss:.4f}")
+    print(f"  AUROC:       {test_metrics_default['auroc']:.4f}")
+    print(f"  AUPRC:       {test_metrics_default['auprc']:.4f}")
+    print(f"  Accuracy:    {test_metrics_default['accuracy']:.4f}")
+    print(f"  Precision:   {test_metrics_default['precision']:.4f}")
+    print(f"  Recall:      {test_metrics_default['recall']:.4f}")
+    print(f"  F1:          {test_metrics_default['f1']:.4f}")
+    print(f"  Specificity: {test_metrics_default['specificity']:.4f}")
+    print(f"  TP: {test_metrics_default['tp']:,} | FP: {test_metrics_default['fp']:,} | "
+          f"TN: {test_metrics_default['tn']:,} | FN: {test_metrics_default['fn']:,}")
+
+    print(f"\nTEST RESULTS (threshold={best_threshold:.2f} — optimized on val)")
+    print("=" * 60)
+    print(f"  Accuracy:    {test_metrics_optimal['accuracy']:.4f}")
+    print(f"  Precision:   {test_metrics_optimal['precision']:.4f}")
+    print(f"  Recall:      {test_metrics_optimal['recall']:.4f}")
+    print(f"  F1:          {test_metrics_optimal['f1']:.4f}")
+    print(f"  Specificity: {test_metrics_optimal['specificity']:.4f}")
+    print(f"  TP: {test_metrics_optimal['tp']:,} | FP: {test_metrics_optimal['fp']:,} | "
+          f"TN: {test_metrics_optimal['tn']:,} | FN: {test_metrics_optimal['fn']:,}")
+
+    # === SAVE RESULTS ===
+    results = {
+        "experiment": CONFIG["experiment"],
+        "timestamp": datetime.now().isoformat(),
+        "config": CONFIG,
+        "training_history": training_history,
+        "best_epoch": best_epoch,
+        "best_val_auprc": best_auprc,
+        "optimal_threshold": best_threshold,
+        "test_loss": avg_test_loss,
+        "test_metrics_default_threshold": test_metrics_default,
+        "test_metrics_optimal_threshold": test_metrics_optimal,
+        "total_params": total_params,
+        "trainable_params": trainable_params
+    }
+
+    results_path = os.path.join(
+        CONFIG["results_dir"],
+        f"results_{CONFIG['experiment']}.json"
+    )
+    with open(results_path, "w") as f:
+        json.dump(results, f, indent=2, default=str)
+    print(f"\nResults saved to: {results_path}")
+
+    return results
 
 
+# ============================================================
+# ENTRY POINT
+# ============================================================
 if __name__ == "__main__":
-
     train()
-
