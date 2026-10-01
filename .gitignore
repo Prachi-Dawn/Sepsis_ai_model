@@ -44,3 +44,6 @@ Thumbs.db
 Results/ml_dataset/*.csv
 Results/preprocessed/*.csv
 Results/data_quality/*.csv
+
+# Generated results
+results/
