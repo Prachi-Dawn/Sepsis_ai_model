@@ -46,4 +46,8 @@ Results/preprocessed/*.csv
 Results/data_quality/*.csv
 
 # Generated results
-results/
+Results/
+
+# Generated ML arrays
+*.npy
+*.npz

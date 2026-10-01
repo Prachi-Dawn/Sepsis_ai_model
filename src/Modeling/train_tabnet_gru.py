@@ -33,7 +33,7 @@ MODEL_FOLDER = os.path.join(
     "models"
 )
 
-DEVICE = torch.device("cpu")
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 INPUT_FEATURES = 73
 SEQUENCE_LENGTH = 12
